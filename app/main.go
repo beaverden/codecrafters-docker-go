@@ -1,9 +1,6 @@
 package main
 
 import (
-	"fmt"
-	"io"
-	"path/filepath"
 	"syscall"
 
 	// Uncomment this block to pass the first stage!
@@ -18,25 +15,33 @@ func main() {
 
 	// Uncomment this block to pass the first stage!
 	//
-	command := os.Args[3]
-	args := os.Args[4:len(os.Args)]
+	args := os.Args[3:len(os.Args)]
 
-	dirpath, _ := os.MkdirTemp("", "test-run")
-	original_path, err := os.Open(command)
-	if err != nil {
-		fmt.Printf("Failed to open original file: %v", err)
-		os.Exit(1)
-	}
-	copied_path, err := os.OpenFile(filepath.Join(dirpath, "executable"), os.O_WRONLY|os.O_CREATE, 0777)
-	if err != nil {
-		fmt.Printf("Failed to open copy file location: %v", err)
-		os.Exit(1)
-	}
-	io.Copy(copied_path, original_path)
-	original_path.Close()
-	copied_path.Close()
+	jailPath, _ := os.MkdirTemp("", "test-run")
 
-	all_args := []string{dirpath, "./executable"}
+	// originalPath, err := os.Open(command)
+	// if err != nil {
+	// 	fmt.Printf("Failed to open original file: %v", err)
+	// 	os.Exit(1)
+	// }
+	// copiedPath, err := os.OpenFile(filepath.Join(dirpath, "executable"), os.O_WRONLY|os.O_CREATE, 0777)
+	// if err != nil {
+	// 	fmt.Printf("Failed to open copy file location: %v", err)
+	// 	os.Exit(1)
+	// }
+	// io.Copy(copiedPath, originalPath)
+	// originalPath.Close()
+	// copiedPath.Close()
+
+	registry := NewRegistry(os.Args[2])
+	if err := registry.Authenticate(); err != nil {
+		panic(err)
+	}
+	if err := registry.Pull(jailPath); err != nil {
+		panic(err)
+	}
+
+	all_args := []string{jailPath}
 	all_args = append(all_args, args...)
 
 	// fmt.Println("Args", all_args)
@@ -46,6 +51,6 @@ func main() {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	err = cmd.Run()
+	_ = cmd.Run()
 	os.Exit(cmd.ProcessState.ExitCode())
 }
