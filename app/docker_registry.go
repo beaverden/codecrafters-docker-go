@@ -45,17 +45,17 @@ type DockerRegistry struct {
 	imageVersion string
 }
 
-func NewRegistry(imageName string) DockerRegistry {
+func NewRegistry(imageReference string) DockerRegistry {
 	//
-	imageNameParts := strings.Split(imageName, ":")
-	var imageName, imageVersion
+	imageNameParts := strings.Split(imageReference, ":")
+	var imageName, imageVersion string
 	imageName = imageNameParts[0]
 	if len(imageNameParts) == 1 {
 		imageVersion = "latest"
 	} else if len(imageNameParts) == 2 {
 		imageVersion = imageNameParts[1]
 	}
-	
+
 	return DockerRegistry{
 		imageName:    imageName,
 		imageVersion: imageVersion,
