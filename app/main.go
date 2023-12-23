@@ -38,7 +38,7 @@ func main() {
 	all_args := []string{dirpath, "./executable"}
 	all_args = append(all_args, args...)
 
-	fmt.Println("Args", all_args)
+	// fmt.Println("Args", all_args)
 	cmd := exec.Command("chroot", all_args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
