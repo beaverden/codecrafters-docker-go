@@ -48,10 +48,19 @@ type DockerRegistry struct {
 func NewRegistry(imageName string) DockerRegistry {
 	//
 	imageNameParts := strings.Split(imageName, ":")
-	return DockerRegistry{
-		imageName:    imageNameParts[0],
-		imageVersion: imageNameParts[1],
+	switch len(imageNameParts) {
+	case 1:
+		return DockerRegistry{
+			imageName:    imageNameParts[0],
+			imageVersion: "latest",
+		}
+	case 2:
+		return DockerRegistry{
+			imageName:    imageNameParts[0],
+			imageVersion: imageNameParts[1],
+		}
 	}
+
 }
 
 func (r *DockerRegistry) Authenticate() error {
