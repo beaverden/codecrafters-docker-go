@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"syscall"
 
 	// Uncomment this block to pass the first stage!
 	"os"
@@ -40,6 +41,8 @@ func main() {
 
 	// fmt.Println("Args", all_args)
 	cmd := exec.Command("chroot", all_args...)
+	options := syscall.SysProcAttr{Cloneflags: syscall.CLONE_NEWPID}
+	cmd.SysProcAttr = &options
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
