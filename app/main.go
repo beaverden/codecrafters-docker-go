@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+
 	// Uncomment this block to pass the first stage!
 	"os"
 	"os/exec"
@@ -18,12 +19,11 @@ func main() {
 	args := os.Args[4:len(os.Args)]
 
 	cmd := exec.Command(command, args...)
-	output, err := cmd.CombinedOutput()
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
-	if err != nil {
+	if err := cmd.Run(); err != nil {
 		fmt.Printf("Err: %v", err)
 		os.Exit(1)
 	}
-
-	fmt.Print(string(output))
 }
