@@ -187,7 +187,6 @@ func (r *DockerRegistry) getLayers(manifest imageManifest, root string) error {
 
 func (r *DockerRegistry) Pull(root string) error {
 	manifestKind, manifestDigest, err := r.getManifestKind()
-	fmt.Println(manifestKind)
 	if err != nil {
 		return err
 	}
