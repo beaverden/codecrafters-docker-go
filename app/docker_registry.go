@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -76,44 +77,59 @@ func (r *DockerRegistry) Authenticate() error {
 	return nil
 }
 
-func (r *DockerRegistry) getFatManifest() (fatManifest, error) {
-	// Gather and parse all multi-architecture image manifests from Fat Manifest
-
+func (r *DockerRegistry) getManifestKind() (string, string, error) {
+	// Finds out which kind of manifest is going to be returned
 	client := http.Client{}
 
 	fatManifestURL := fmt.Sprintf("https://registry.hub.docker.com/v2/library/%s/manifests/%s", r.imageName, r.imageVersion)
-	req, err := http.NewRequest("GET", fatManifestURL, nil)
+	req, err := http.NewRequest("HEAD", fatManifestURL, nil)
 	if err != nil {
-		return fatManifest{}, err
+		return "", "", err
 	}
 	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", r.auth.Token))
 	req.Header.Add("Accept", "application/vnd.docker.distribution.manifest.v2+json")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return fatManifest{}, err
+		return "", "", err
+	}
+	defer resp.Body.Close()
+	return resp.Header.Get("Content-Type"), resp.Header.Get("Docker-Content-Digest"), nil
+}
+
+func (r *DockerRegistry) getFromManifestList() (imageManifest, error) {
+	// Gather and parse all multi-architecture image manifests from Fat Manifest and returns the first one
+
+	client := http.Client{}
+
+	fatManifestURL := fmt.Sprintf("https://registry.hub.docker.com/v2/library/%s/manifests/%s", r.imageName, r.imageVersion)
+	req, err := http.NewRequest("GET", fatManifestURL, nil)
+	if err != nil {
+		return imageManifest{}, err
+	}
+	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", r.auth.Token))
+	req.Header.Add("Accept", "application/vnd.docker.distribution.manifest.v2+json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return imageManifest{}, err
 	}
 	defer resp.Body.Close()
 
 	var manifest fatManifest
 	err = json.NewDecoder(resp.Body).Decode(&manifest)
 	if err != nil {
-		return fatManifest{}, err
+		return imageManifest{}, err
 	}
-	return manifest, nil
+	return r.getManifestByDigest(manifest.Manifests[0].Digest)
 }
 
-func (r *DockerRegistry) getManifest() (imageManifest, error) {
+func (r *DockerRegistry) getManifestByDigest(digest string) (imageManifest, error) {
 	// Pull and parse a single manifest extracted from Fat Manifest
 	client := http.Client{}
 
-	fatManifest, err := r.getFatManifest()
-	if err != nil {
-		return imageManifest{}, err
-	}
-
-	singleManifestURL := fmt.Sprintf("https://registry.hub.docker.com/v2/library/%s/manifests/%s", r.imageName, fatManifest.Manifests[0].Digest)
-	req, err := http.NewRequest("GET", singleManifestURL, nil)
+	manifestURL := fmt.Sprintf("https://registry.hub.docker.com/v2/library/%s/manifests/%s", r.imageName, digest)
+	req, err := http.NewRequest("GET", manifestURL, nil)
 	if err != nil {
 		return imageManifest{}, err
 	}
@@ -170,9 +186,20 @@ func (r *DockerRegistry) getLayers(manifest imageManifest, root string) error {
 }
 
 func (r *DockerRegistry) Pull(root string) error {
-	manifest, err := r.getManifest()
+	manifestKind, manifestDigest, err := r.getManifestKind()
+	fmt.Println(manifestKind)
 	if err != nil {
 		return err
+	}
+
+	var manifest imageManifest
+	switch manifestKind {
+	case "application/vnd.oci.image.index.v1+json":
+		manifest, err = r.getFromManifestList()
+	case "application/vnd.docker.distribution.manifest.v2+json":
+		manifest, err = r.getManifestByDigest(manifestDigest)
+	default:
+		return errors.New(fmt.Sprintf("Unknown manifest kind: %s", manifestKind))
 	}
 	err = r.getLayers(manifest, root)
 	if err != nil {
