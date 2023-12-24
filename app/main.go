@@ -1,39 +1,23 @@
 package main
 
 import (
-	"syscall"
-
-	// Uncomment this block to pass the first stage!
 	"os"
 	"os/exec"
+	"strings"
+	"syscall"
+
+	log "github.com/sirupsen/logrus"
 )
 
-// Usage: your_docker.sh run <image> <command> <arg1> <arg2> ...
 func main() {
-	// You can use print statements as follows for debugging, they'll be visible when running tests.
-	// fmt.Println("Logs from your program will appear here!")
+	imageReference := os.Args[2]
+	runArgs := os.Args[3:len(os.Args)]
+	log.Infof("Running image %s with args [%v]", imageReference, strings.Join(runArgs, ", "))
 
-	// Uncomment this block to pass the first stage!
-	//
-	args := os.Args[3:len(os.Args)]
+	jailPath, _ := os.MkdirTemp("", "run-jail")
+	log.Infof("Created jail path at %s", jailPath)
 
-	jailPath, _ := os.MkdirTemp("", "test-run")
-
-	// originalPath, err := os.Open(command)
-	// if err != nil {
-	// 	fmt.Printf("Failed to open original file: %v", err)
-	// 	os.Exit(1)
-	// }
-	// copiedPath, err := os.OpenFile(filepath.Join(dirpath, "executable"), os.O_WRONLY|os.O_CREATE, 0777)
-	// if err != nil {
-	// 	fmt.Printf("Failed to open copy file location: %v", err)
-	// 	os.Exit(1)
-	// }
-	// io.Copy(copiedPath, originalPath)
-	// originalPath.Close()
-	// copiedPath.Close()
-
-	registry := NewRegistry(os.Args[2])
+	registry := NewRegistry(imageReference)
 	if err := registry.Authenticate(); err != nil {
 		panic(err)
 	}
@@ -41,16 +25,18 @@ func main() {
 		panic(err)
 	}
 
-	all_args := []string{jailPath}
-	all_args = append(all_args, args...)
-
-	// fmt.Println("Args", all_args)
-	cmd := exec.Command("chroot", all_args...)
+	chrootArgs := []string{jailPath}
+	chrootArgs = append(chrootArgs, runArgs...)
+	log.Infof("Running chroot with args [%v]", strings.Join(chrootArgs, ", "))
+	cmd := exec.Command("chroot", chrootArgs...)
 	options := syscall.SysProcAttr{Cloneflags: syscall.CLONE_NEWPID}
 	cmd.SysProcAttr = &options
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	_ = cmd.Run()
+	if err := cmd.Run(); err != nil {
+		panic(err)
+	}
+	log.Infof("Process finished with code: %d", cmd.ProcessState.ExitCode())
 	os.Exit(cmd.ProcessState.ExitCode())
 }

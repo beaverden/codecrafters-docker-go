@@ -1,47 +1,60 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
+
+	"github.com/codeclysm/extract"
+	log "github.com/sirupsen/logrus"
 )
 
-type authResponse struct {
+type ContentType string
+
+const (
+	ImageManifestV2 ContentType = "application/vnd.docker.distribution.manifest.v2+json"
+	ImageManifestV1 ContentType = "application/vnd.oci.image.manifest.v1+json"
+	ManifestList    ContentType = "application/vnd.oci.image.index.v1+json"
+)
+
+type registryAuth struct {
 	Token       string    `json:"token"`
 	AccessToken string    `json:"access_toke"`
 	ExpiresIn   int       `json:"expires_in"`
 	IssuedAt    time.Time `json:"issued_at"`
 }
 
-// type manifestDescription struct {
-// 	Digest    string `json:"digest"`
-// 	MediaType string `json:"mediaType"`
-// 	Platform  struct {
-// 		Architecture string `json:"architecture"`
-// 		OS           string `json:"OS"`
-// 	} `json:"platform"`
-// }
-
-type fatManifest struct {
-	Manifests []struct {
-		Digest string `json:"digest"`
-	} `json:"manifests"`
-}
-
+// https://distribution.github.io/distribution/spec/manifest-v2-2/
+// Describes the common format of Manifest List and Image Manifest
+//
+// Extracted here are only the required fields
+// The Manifests[] list is present in Manifest List (application/vnd.oci.image.index.v1+json)
+// The Layers[] list is present in Image Manifest V2 (application/vnd.docker.distribution.manifest.v2+json)
+// and Image manifest V1 (application/vnd.oci.image.manifest.v1+json)
 type imageManifest struct {
-	MediaType string `json:"application/vnd.docker.distribution.manifest.v2+json"`
-	Layers    []struct {
-		Digest string `json:"digest"`
+	MediaType ContentType `json:"mediaType"`
+
+	Manifests []struct {
+		MediaType ContentType `json:"mediaType"`
+		Digest    string      `json:"digest"`
+		Platform  struct {
+			Architecture string `json:"architecture"`
+			OS           string `json:"OS"`
+		} `json:"platform"`
+	} `json:"manifests"`
+
+	Layers []struct {
+		Digest    string      `json:"digest"`
+		MediaType ContentType `json:"mediaType"`
 	} `json:"layers"`
 }
 
 type DockerRegistry struct {
-	auth         authResponse
+	auth         registryAuth
 	imageName    string
 	imageVersion string
 }
@@ -57,6 +70,7 @@ func NewRegistry(imageReference string) DockerRegistry {
 		imageVersion = imageNameParts[1]
 	}
 
+	log.Infof("Registry created to pull %s:%s from initial reference %s", imageName, imageVersion, imageReference)
 	return DockerRegistry{
 		imageName:    imageName,
 		imageVersion: imageVersion,
@@ -67,74 +81,30 @@ func (r *DockerRegistry) Authenticate() error {
 	authUrl := fmt.Sprintf("https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/%s:pull", r.imageName)
 	resp, err := http.Get(authUrl)
 	if err != nil {
-		return err
+		return fmt.Errorf("Failed to create request for auth", err)
 	}
 	defer resp.Body.Close()
+
 	err = json.NewDecoder(resp.Body).Decode(&r.auth)
 	if err != nil {
-		return err
+		return fmt.Errorf("Failed to parse auth response", err)
 	}
+	log.Infof("Successfully authenticated in the registry, token viable for %d seconds", r.auth.ExpiresIn)
 	return nil
 }
 
-func (r *DockerRegistry) getManifestKind() (string, string, error) {
-	// Finds out which kind of manifest is going to be returned
-	client := http.Client{}
-
-	fatManifestURL := fmt.Sprintf("https://registry.hub.docker.com/v2/library/%s/manifests/%s", r.imageName, r.imageVersion)
-	req, err := http.NewRequest("HEAD", fatManifestURL, nil)
-	if err != nil {
-		return "", "", err
-	}
-	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", r.auth.Token))
-	req.Header.Add("Accept", "application/vnd.docker.distribution.manifest.v2+json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", "", err
-	}
-	defer resp.Body.Close()
-	return resp.Header.Get("Content-Type"), resp.Header.Get("Docker-Content-Digest"), nil
-}
-
-func (r *DockerRegistry) getFromManifestList() (imageManifest, error) {
-	// Gather and parse all multi-architecture image manifests from Fat Manifest and returns the first one
+func (r *DockerRegistry) getManifest(reference string, expect ContentType) (imageManifest, error) {
+	log.Infof("Requesting manifest for %s with reference: %s", r.imageName, reference)
 
 	client := http.Client{}
 
-	fatManifestURL := fmt.Sprintf("https://registry.hub.docker.com/v2/library/%s/manifests/%s", r.imageName, r.imageVersion)
-	req, err := http.NewRequest("GET", fatManifestURL, nil)
-	if err != nil {
-		return imageManifest{}, err
-	}
-	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", r.auth.Token))
-	req.Header.Add("Accept", "application/vnd.docker.distribution.manifest.v2+json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return imageManifest{}, err
-	}
-	defer resp.Body.Close()
-
-	var manifest fatManifest
-	err = json.NewDecoder(resp.Body).Decode(&manifest)
-	if err != nil {
-		return imageManifest{}, err
-	}
-	return r.getManifestByDigest(manifest.Manifests[0].Digest)
-}
-
-func (r *DockerRegistry) getManifestByDigest(digest string) (imageManifest, error) {
-	// Pull and parse a single manifest extracted from Fat Manifest
-	client := http.Client{}
-
-	manifestURL := fmt.Sprintf("https://registry.hub.docker.com/v2/library/%s/manifests/%s", r.imageName, digest)
+	manifestURL := fmt.Sprintf("https://registry.hub.docker.com/v2/library/%s/manifests/%s", r.imageName, reference)
 	req, err := http.NewRequest("GET", manifestURL, nil)
 	if err != nil {
 		return imageManifest{}, err
 	}
 	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", r.auth.Token))
-	req.Header.Add("Accept", "application/vnd.oci.image.manifest.v1+json")
+	req.Header.Add("Accept", string(expect))
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -142,19 +112,22 @@ func (r *DockerRegistry) getManifestByDigest(digest string) (imageManifest, erro
 	}
 	defer resp.Body.Close()
 
-	var manifest imageManifest
-	err = json.NewDecoder(resp.Body).Decode(&manifest)
+	var m imageManifest
+	err = json.NewDecoder(resp.Body).Decode(&m)
 	if err != nil {
 		return imageManifest{}, err
 	}
-	return manifest, nil
+
+	log.Infof("Got manifest of type: %s", m.MediaType)
+
+	return m, nil
 }
 
-func (r *DockerRegistry) getLayers(manifest imageManifest, root string) error {
+func (r *DockerRegistry) getLayers(m imageManifest, root string) error {
 	client := http.Client{}
 
-	for _, layer := range manifest.Layers {
-		// fmt.Printf("Pulling layer [%s]", layer.Digest)
+	for _, layer := range m.Layers {
+		log.Infof("Pulling layer [%s]", layer.Digest)
 
 		layerURL := fmt.Sprintf("https://registry.hub.docker.com/v2/library/%s/blobs/%s", r.imageName, layer.Digest)
 		req, err := http.NewRequest("GET", layerURL, nil)
@@ -167,39 +140,28 @@ func (r *DockerRegistry) getLayers(manifest imageManifest, root string) error {
 			return err
 		}
 		defer resp.Body.Close()
-
-		tmpTarFile, err := os.CreateTemp("", "layer-tar")
-		if err != nil {
+		if err := extract.Archive(context.Background(), resp.Body, root, nil); err != nil {
 			return err
 		}
-		defer tmpTarFile.Close()
-		if _, err := io.Copy(tmpTarFile, resp.Body); err != nil {
-			return err
-		}
-		if err := extractTarArchive(tmpTarFile.Name(), root); err != nil {
-			return err
-		}
-		os.Remove(tmpTarFile.Name())
-
 	}
 	return nil
 }
 
 func (r *DockerRegistry) Pull(root string) error {
-	manifestKind, manifestDigest, err := r.getManifestKind()
+	manifest, err := r.getManifest("latest", ImageManifestV2)
 	if err != nil {
 		return err
 	}
-
-	var manifest imageManifest
-	switch manifestKind {
-	case "application/vnd.oci.image.index.v1+json":
-		manifest, err = r.getFromManifestList()
-	case "application/vnd.docker.distribution.manifest.v2+json":
-		manifest, err = r.getManifestByDigest(manifestDigest)
+	switch manifest.MediaType {
+	case ManifestList:
+		log.Infof("Got manifest list, requesting the first manifest in the list")
+		manifest, err = r.getManifest(manifest.Manifests[0].Digest, manifest.Manifests[0].MediaType)
+	case ImageManifestV1:
+	case ImageManifestV2:
 	default:
-		return errors.New(fmt.Sprintf("Unknown manifest kind: %s", manifestKind))
+		return errors.New(fmt.Sprintf("Unknown manifest type: %s", manifest.MediaType))
 	}
+
 	err = r.getLayers(manifest, root)
 	if err != nil {
 		return err
