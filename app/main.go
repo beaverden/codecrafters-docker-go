@@ -6,10 +6,25 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/sirupsen/logrus"
 	log "github.com/sirupsen/logrus"
 )
 
+func setupLogging() {
+	lvl, ok := os.LookupEnv("LOG_LEVEL")
+	if !ok {
+		lvl = "error"
+	}
+	ll, err := logrus.ParseLevel(lvl)
+	if err != nil {
+		ll = logrus.ErrorLevel
+	}
+	logrus.SetLevel(ll)
+}
+
 func main() {
+	setupLogging()
+
 	imageReference := os.Args[2]
 	runArgs := os.Args[3:len(os.Args)]
 	log.Infof("Running image %s with args [%v]", imageReference, strings.Join(runArgs, ", "))
